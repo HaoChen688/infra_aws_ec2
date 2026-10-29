@@ -88,6 +88,12 @@ jobs:
             "VERSION='${{ steps.ver.outputs.version }}' PORT='${{ env.APP_PORT }}' bash -s" <<'EOF'
           set -euo pipefail
           echo "== Deploying $VERSION on $(hostname) =="
+          
+          # ---- 防御：确保关键变量非空 ----
+          : "${VERSION:?VERSION is empty}"
+          : "${PORT:?PORT is empty}"
+
+          echo "== Deploying $VERSION on $(hostname), port=$PORT =="
 
           REL_DIR="/opt/app/releases/$VERSION"
           mkdir -p "$REL_DIR"
