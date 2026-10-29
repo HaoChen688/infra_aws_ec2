@@ -129,7 +129,8 @@ jobs:
             sudo nginx -t || true
             exit 1
           fi
-          sudo systemctl reload nginx
+          sudo nginx
+          sudo nginx -s reload
 
           # 健康检查：20 次 × 3 秒
           OK=0
@@ -145,7 +146,6 @@ jobs:
 
           if [ "$OK" -ne 1 ]; then
             echo "nginx check failed, diagnostics:"
-            sudo systemctl status nginx --no-pager || true
             sudo nginx -t || true
             sudo tail -n 50 /var/log/nginx/error.log || true
             curl -v "http://localhost:${SITE_PORT}/" || true
