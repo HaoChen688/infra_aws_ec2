@@ -1839,7 +1839,8 @@ bash
 # 首次
 git init
 git checkout -b dev
-git add .gitignore modules envs scripts .github
+git add .
+#git add .gitignore modules envs scripts .github
 git commit -m "feat: terraform ec2 module + deploy workflows + .gitignore"
 git remote add origin https://github.com/HaoChen688/infra_aws_ec2.git
 git push -u origin dev
