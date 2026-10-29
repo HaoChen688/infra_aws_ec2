@@ -1,0 +1,100 @@
+name: Terraform DEV (provision)
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Terraform action"
+        type: choice
+        options: [plan, apply, destroy]
+        default: plan
+      admin_cidrs:
+        description: "SSH allowed CIDRs (comma separated). Empty = use terraform.tfvars."
+        required: false
+        default: ""
+      confirm_destroy:
+        description: "Type 'destroy-dev' to confirm destroy"
+        required: false
+        default: ""
+
+concurrency:
+  group: terraform-dev
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    environment: dev
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.TF_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: us-east-1
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+    defaults:
+      run:
+        working-directory: infra_aws_ec2/envs/dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.5"
+
+      - name: Guard destroy
+        if: ${{ inputs.action == 'destroy' }}
+        run: |
+          if [ "${{ inputs.confirm_destroy }}" != "destroy-dev" ]; then
+            echo "::error::To destroy DEV, set confirm_destroy=destroy-dev"
+            exit 1
+          fi
+
+      - name: Render tfvars override (admin_cidrs)
+        if: ${{ inputs.admin_cidrs != '' }}
+        run: |
+          cat > override.auto.tfvars <<EOF
+          admin_cidrs = [$(echo "${{ inputs.admin_cidrs }}" | awk -F',' '{for(i=1;i<=NF;i++){printf "\"%s\"%s", $i, (i<NF?",":"")}}')]
+          EOF
+          cat override.auto.tfvars
+
+      - name: Terraform fmt
+        run: terraform fmt -check -recursive || true
+
+      - name: Terraform init
+        run: terraform init -input=false
+
+      - name: Terraform validate
+        run: terraform validate
+
+      - name: Terraform plan
+        if: ${{ inputs.action != 'destroy' }}
+        run: terraform plan -input=false -out=tfplan
+
+      - name: Upload plan artifact
+        if: ${{ inputs.action != 'destroy' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-dev
+          path: infra_aws_ec2/envs/dev/tfplan
+          retention-days: 7
+
+      - name: Terraform apply
+        if: ${{ inputs.action == 'apply' }}
+        run: terraform apply -input=false -auto-approve tfplan
+
+      - name: Terraform destroy
+        if: ${{ inputs.action == 'destroy' }}
+        run: terraform destroy -input=false -auto-approve
+
+      - name: Output summary
+        if: ${{ inputs.action != 'destroy' }}
+        run: |
+          {
+            echo "### Terraform DEV (${{ inputs.action }})"
+            echo '```'
+            terraform output
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

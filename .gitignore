@@ -1,0 +1,94 @@
+# ============================================================
+# Terraform
+# ============================================================
+
+# 本地 provider 缓存（terraform init 生成，可重建，几十 MB）
+.terraform/
+**/.terraform/*
+.terraform.tfstate.lock.info
+
+# 本地 state（state 在 S3，本地不应有；防误生成）
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+
+# plan 产物（含敏感快照，临时文件）
+tfplan
+*.tfplan
+plan.out
+
+# CI 动态生成的变量覆盖（admin_cidrs 等）
+override.auto.tfvars
+*.auto.tfvars
+
+# 崩溃日志
+crash.log
+crash.*.log
+
+# 注意：.terraform.lock.hcl 不忽略！应入库锁定 provider 版本
+
+# ============================================================
+# 密钥 / 凭证（绝不入库）
+# ============================================================
+
+# 管理员登录私钥（app-key.pem）
+*.pem
+*.key
+
+# 发布私钥/公钥（gha_key / gha_key.pub）
+gha_key
+gha_key.pub
+
+# SSH 相关
+.ssh/
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+
+# 环境变量
+.env
+.env.*
+!.env.example
+
+# AWS 凭证
+.aws/
+credentials
+
+# ============================================================
+# 构建产物 / 依赖
+# ============================================================
+
+dist/
+build/
+node_modules/
+target/
+*.tar.gz
+*.zip
+
+# ============================================================
+# 系统 / 编辑器
+# ============================================================
+
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ============================================================
+# 日志
+# ============================================================
+
+*.log
+logs/
+
+
+*.tf                 text eol=lf
+.terraform.lock.hcl  text eol=lf
+*.sh                 text eol=lf
+*.md                 text eol=lf
+*.png                binary
+*.jpg                binary

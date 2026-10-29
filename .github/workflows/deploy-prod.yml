@@ -1,0 +1,169 @@
+name: Deploy to PROD
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to deploy (e.g. v1.0.0)"
+        required: true
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: prod          # 需人工审批
+
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      APP_NAME: myapp
+      APP_PORT: "8080"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: ver
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ]; then
+            VERSION="${GITHUB_REF_NAME}"
+          else
+            VERSION="${{ inputs.tag }}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "VERSION=$VERSION"
+
+      - name: Verify tag is on main
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          git fetch origin main --tags
+          if ! git rev-parse "refs/tags/$VERSION" >/dev/null 2>&1; then
+            echo "::error::Tag $VERSION not found"
+            exit 1
+          fi
+          TAG_SHA=$(git rev-list -n 1 "refs/tags/$VERSION")
+          if ! git merge-base --is-ancestor "$TAG_SHA" origin/main; then
+            echo "::error::Tag $VERSION is not on main branch"
+            exit 1
+          fi
+          echo "tag $VERSION is on main ($TAG_SHA)"
+
+      - name: Checkout tag
+        run: |
+          set -euo pipefail
+          git checkout "${{ steps.ver.outputs.version }}"
+
+      # ---------- 构建 / 打包 ----------
+      - name: Build artifact
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          tar --exclude='.git' --exclude='dist' -czf dist/app.tar.gz .
+          ls -lh dist/app.tar.gz
+
+      - name: Upload artifact (workflow artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-prod-${{ steps.ver.outputs.version }}
+          path: dist/app.tar.gz
+          retention-days: 30
+
+      # ---------- 解析 PROD IP（按 tag:env=prod） ----------
+      - name: Resolve PROD IP by tag
+        id: host
+        run: |
+          set -euo pipefail
+          IP=$(aws ec2 describe-instances \
+            --filters "Name=tag:env,Values=prod" "Name=instance-state-name,Values=running" \
+            --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
+          if [ -z "$IP" ] || [ "$IP" == "None" ]; then
+            echo "::error::No running PROD instance with tag env=prod. Run 'Terraform PROD (provision)' workflow first."
+            exit 1
+          fi
+          echo "ip=$IP" >> "$GITHUB_OUTPUT"
+
+      - name: Setup SSH
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PROD_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${{ steps.host.outputs.ip }}" >> ~/.ssh/known_hosts
+
+      # ---------- 上传产物 ----------
+      - name: Upload artifact to server
+        run: |
+          set -euo pipefail
+          scp -i ~/.ssh/id_ed25519 dist/app.tar.gz \
+            deploy@${{ steps.host.outputs.ip }}:/tmp/app-${{ steps.ver.outputs.version }}.tar.gz
+
+      # ---------- 发布：解包 → 切软链 → 重启 → 健康检查 → 失败回滚 ----------
+      - name: Release on server
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/id_ed25519 deploy@${{ steps.host.outputs.ip }} \
+            "VERSION='${{ steps.ver.outputs.version }}' PORT='${{ env.APP_PORT }}' bash -s" <<'EOF'
+          set -euo pipefail
+          echo "== Deploying $VERSION on $(hostname) =="
+
+          REL_DIR="/opt/app/releases/$VERSION"
+          mkdir -p "$REL_DIR"
+          tar -xzf "/tmp/app-$VERSION.tar.gz" -C "$REL_DIR"
+          rm -f "/tmp/app-$VERSION.tar.gz"
+
+          # 安装依赖 / 构建（按项目替换）
+          # cd "$REL_DIR" && npm ci --omit=dev && npm run build
+
+          PREV=$(readlink -f /opt/app/current || true)
+          echo "previous: ${PREV:-none}"
+
+          sudo ln -sfn "$REL_DIR" /opt/app/current
+          sudo sed -i "s/^APP_VERSION=.*/APP_VERSION=$VERSION/" /opt/app/shared/.env
+
+          sudo systemctl restart app.service
+          sleep 5
+
+          for i in $(seq 1 12); do
+            if curl -fsS "http://localhost:$PORT/health" >/dev/null 2>&1; then
+              echo "health OK"
+              break
+            fi
+            echo "waiting health... ($i)"; sleep 5
+            if [ "$i" -eq 12 ]; then
+              echo "health check failed, rolling back"
+              if [ -n "${PREV:-}" ] && [ -d "$PREV" ]; then
+                sudo ln -sfn "$PREV" /opt/app/current
+                sudo systemctl restart app.service
+                echo "rolled back to $PREV"
+              fi
+              exit 1
+            fi
+          done
+
+          echo "== Deploy done: $VERSION =="
+          EOF
+
+      - name: Output summary
+        if: always()
+        run: |
+          {
+            echo "### Deploy to PROD"
+            echo "- Version: \`${{ steps.ver.outputs.version }}\`"
+            echo "- Host: \`${{ steps.host.outputs.ip }}\`"
+            echo "- Tag: \`${{ steps.ver.outputs.version }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

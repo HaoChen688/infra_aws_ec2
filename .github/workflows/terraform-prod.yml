@@ -1,0 +1,103 @@
+name: Terraform PROD (provision)
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Terraform action (apply requires approval)"
+        type: choice
+        options: [plan, apply]
+        default: plan
+      admin_cidrs:
+        description: "SSH allowed CIDRs (comma separated). Empty = use terraform.tfvars."
+        required: false
+        default: ""
+
+concurrency:
+  group: terraform-prod
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    environment: prod          # 审批 #1
+    outputs:
+      has_changes: ${{ steps.plan.outputs.has_changes }}
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.TF_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: us-east-1
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+    defaults:
+      run:
+        working-directory: infra_aws_ec2/envs/prod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with: { terraform_version: "1.7.5" }
+
+      - name: Render tfvars override (admin_cidrs)
+        if: ${{ inputs.admin_cidrs != '' }}
+        run: |
+          cat > override.auto.tfvars <<EOF
+          admin_cidrs = [$(echo "${{ inputs.admin_cidrs }}" | awk -F',' '{for(i=1;i<=NF;i++){printf "\"%s\"%s", $i, (i<NF?",":"")}}')]
+          EOF
+          cat override.auto.tfvars
+
+      - run: terraform init -input=false
+
+      - id: plan
+        run: |
+          set +e
+          terraform plan -input=false -out=tfplan -detailed-exitcode
+          code=$?
+          set -e
+          if [ "$code" -eq 1 ]; then exit 1; fi
+          echo "has_changes=$code" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-prod
+          path: infra_aws_ec2/envs/prod/tfplan
+          retention-days: 7
+
+  apply:
+    needs: plan
+    if: ${{ inputs.action == 'apply' && needs.plan.outputs.has_changes == '2' }}
+    runs-on: ubuntu-latest
+    environment: prod          # 审批 #2
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.TF_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: us-east-1
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+    defaults:
+      run:
+        working-directory: infra_aws_ec2/envs/prod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with: { terraform_version: "1.7.5" }
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tfplan-prod
+          path: infra_aws_ec2/envs/prod
+
+      - run: terraform init -input=false
+
+      - run: terraform apply -input=false -auto-approve tfplan
+
+      - name: Output summary
+        run: |
+          {
+            echo "### Terraform PROD applied"
+            echo '```'
+            terraform output
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
