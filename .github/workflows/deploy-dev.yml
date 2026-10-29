@@ -21,30 +21,39 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_REGION: ${{ secrets.AWS_REGION }}
-      APP_NAME: myapp
-      APP_PORT: "8080"
+      SITE_ROOT: /opt/site
+      SITE_PORT: "80"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ---------- 构建 / 打包（按项目替换） ----------
+      # ---------- 打包静态文件（public/ 下所有内容，含 assets/） ----------
       - name: Build artifact
         run: |
           set -euo pipefail
+          if [ ! -d public ]; then
+            echo "::error::public/ 目录不存在"
+            exit 1
+          fi
+          if [ ! -f public/index.html ]; then
+            echo "::error::public/index.html 不存在"
+            exit 1
+          fi
           mkdir -p dist
-          # 示例：把仓库打成 tar.gz；真实项目换成 npm build / mvn package 等
-          tar --exclude='.git' --exclude='dist' -czf dist/app.tar.gz .
-          ls -lh dist/app.tar.gz
+          tar -czf dist/site.tar.gz -C public .
+          echo "--- artifact content ---"
+          tar -tzf dist/site.tar.gz | head -50
+          ls -lh dist/site.tar.gz
 
-      - name: Upload artifact (workflow artifact, 便于排查)
+      - name: Upload artifact (workflow artifact)
         uses: actions/upload-artifact@v4
         with:
-          name: app-dev-${{ github.sha }}
-          path: dist/app.tar.gz
+          name: site-dev-${{ github.sha }}
+          path: dist/site.tar.gz
           retention-days: 7
 
-      # ---------- 解析 DEV IP（按 tag:env=dev） ----------
+      # ---------- 解析 DEV IP（tag:env=dev） ----------
       - name: Resolve DEV IP by tag
         id: host
         run: |
@@ -53,7 +62,7 @@ jobs:
             --filters "Name=tag:env,Values=dev" "Name=instance-state-name,Values=running" \
             --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
           if [ -z "$IP" ] || [ "$IP" == "None" ]; then
-            echo "::error::No running DEV instance with tag env=dev. Run 'Terraform DEV (provision)' workflow first."
+            echo "::error::No running DEV instance with tag env=dev."
             exit 1
           fi
           echo "ip=$IP" >> "$GITHUB_OUTPUT"
@@ -73,64 +82,81 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "VERSION=$VERSION"
 
-      # ---------- 上传产物 ----------
+      # ---------- 上传 ----------
       - name: Upload artifact to server
         run: |
           set -euo pipefail
-          scp -i ~/.ssh/id_ed25519 dist/app.tar.gz \
-            deploy@${{ steps.host.outputs.ip }}:/tmp/app-${{ steps.ver.outputs.version }}.tar.gz
+          scp -i ~/.ssh/id_ed25519 dist/site.tar.gz \
+            deploy@${{ steps.host.outputs.ip }}:/tmp/site-${{ steps.ver.outputs.version }}.tar.gz
 
-      # ---------- 发布：解包 → 切软链 → 重启 → 健康检查 ----------
+      # ---------- 发布：解包 → 切软链 → reload nginx → 健康检查 ----------
       - name: Release on server
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          SITE_ROOT: ${{ env.SITE_ROOT }}
+          SITE_PORT: ${{ env.SITE_PORT }}
         run: |
           set -euo pipefail
           ssh -i ~/.ssh/id_ed25519 deploy@${{ steps.host.outputs.ip }} \
-            "VERSION='${{ steps.ver.outputs.version }}' PORT='${{ env.APP_PORT }}' bash -s" <<'EOF'
+            "VERSION='$VERSION' SITE_ROOT='$SITE_ROOT' SITE_PORT='$SITE_PORT' bash -s" <<'EOF'
           set -euo pipefail
-          echo "== Deploying $VERSION on $(hostname) =="
-          
-          # ---- 防御：确保关键变量非空 ----
           : "${VERSION:?VERSION is empty}"
-          : "${PORT:?PORT is empty}"
+          : "${SITE_ROOT:?SITE_ROOT is empty}"
+          : "${SITE_PORT:?SITE_PORT is empty}"
 
-          echo "== Deploying $VERSION on $(hostname), port=$PORT =="
+          echo "== Deploying $VERSION to $SITE_ROOT (port $SITE_PORT) on $(hostname) =="
 
-          REL_DIR="/opt/app/releases/$VERSION"
-          mkdir -p "$REL_DIR"
-          tar -xzf "/tmp/app-$VERSION.tar.gz" -C "$REL_DIR"
-          rm -f "/tmp/app-$VERSION.tar.gz"
+          REL_DIR="$SITE_ROOT/releases/$VERSION"
 
-          # 安装依赖 / 构建（按项目替换；示例：无操作）
-          # cd "$REL_DIR" && npm ci && npm run build
+          # 解包到新版本目录
+          sudo mkdir -p "$REL_DIR"
+          sudo tar -xzf "/tmp/site-$VERSION.tar.gz" -C "$REL_DIR"
+          rm -f "/tmp/site-$VERSION.tar.gz"
 
-          # 切换软链
-          sudo ln -sfn "$REL_DIR" /opt/app/current
+          # 校验关键文件
+          if [ ! -f "$REL_DIR/index.html" ]; then
+            echo "index.html missing in $REL_DIR"
+            sudo find "$REL_DIR" -maxdepth 2 -type f | head -50
+            exit 1
+          fi
 
-          # 更新 .env 里的版本号
-          sudo sed -i "s/^APP_VERSION=.*/APP_VERSION=$VERSION/" /opt/app/shared/.env
+          # 切软链
+          sudo ln -sfn "$REL_DIR" "$SITE_ROOT/current"
 
-          # 重启应用
-          sudo systemctl restart app.service
-          sleep 3
+          # nginx 配置检查 + reload
+          if ! sudo nginx -t; then
+            echo "nginx config test failed"
+            sudo nginx -t || true
+            exit 1
+          fi
+          sudo systemctl reload nginx
 
-          # 健康检查
-          for i in $(seq 1 10); do
-            if curl -fsS "http://localhost:$PORT/health" >/dev/null 2>&1; then
-              echo "health OK"
+          # 健康检查：20 次 × 3 秒
+          OK=0
+          for i in $(seq 1 20); do
+            if curl -fsS "http://localhost:${SITE_PORT}/" >/dev/null 2>&1; then
+              echo "health OK (attempt $i)"
+              OK=1
               break
             fi
-            echo "waiting health... ($i)"; sleep 3
-            if [ "$i" -eq 10 ]; then
-              echo "health check failed, rolling back"
-              PREV=$(ls -1 /opt/app/releases | grep -v "^$VERSION$" | sort | tail -n1 || true)
-              if [ -n "$PREV" ]; then
-                sudo ln -sfn "/opt/app/releases/$PREV" /opt/app/current
-                sudo systemctl restart app.service
-                echo "rolled back to $PREV"
-              fi
-              exit 1
-            fi
+            echo "waiting nginx... ($i)"
+            sleep 3
           done
+
+          if [ "$OK" -ne 1 ]; then
+            echo "nginx check failed, diagnostics:"
+            sudo systemctl status nginx --no-pager || true
+            sudo nginx -t || true
+            sudo tail -n 50 /var/log/nginx/error.log || true
+            curl -v "http://localhost:${SITE_PORT}/" || true
+            exit 1
+          fi
+
+          # 检查 assets 是否可访问
+          if [ -f "$REL_DIR/assets/style.css" ]; then
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${SITE_PORT}/assets/style.css" || true)
+            echo "assets/style.css -> $code"
+          fi
 
           echo "== Deploy done: $VERSION =="
           EOF
@@ -139,8 +165,9 @@ jobs:
         if: always()
         run: |
           {
-            echo "### Deploy to DEV"
+            echo "### Deploy to DEV (nginx)"
             echo "- Version: \`${{ steps.ver.outputs.version }}\`"
             echo "- Host: \`${{ steps.host.outputs.ip }}\`"
+            echo "- URL: http://${{ steps.host.outputs.ip }}/"
             echo "- Commit: \`${{ github.sha }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
