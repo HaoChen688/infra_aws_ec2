@@ -129,9 +129,16 @@ jobs:
             sudo nginx -t || true
             exit 1
           fi
-          sudo nginx
-          sudo nginx -s reload
-
+          
+          # 若 nginx 未运行则启动，否则 reload
+          if ! pgrep -x nginx >/dev/null 2>&1; then
+            echo "nginx not running, starting..."
+            sudo nginx
+          else
+            echo "nginx running, reloading..."
+            sudo nginx -s reload
+          fi
+          
           # 健康检查：20 次 × 3 秒
           OK=0
           for i in $(seq 1 20); do
