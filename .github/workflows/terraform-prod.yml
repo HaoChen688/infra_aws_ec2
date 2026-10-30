@@ -23,7 +23,7 @@ permissions:
 jobs:
   plan:
     runs-on: ubuntu-latest
-    environment: prod          # 审批 #1
+    environment: prod
     outputs:
       has_changes: ${{ steps.plan.outputs.has_changes }}
     env:
@@ -65,14 +65,14 @@ EOF
       - uses: actions/upload-artifact@v4
         with:
           name: tfplan-prod
-          path: ./envs/prod/tfplan
+          path: tfplan
           retention-days: 7
 
   apply:
     needs: plan
     if: ${{ inputs.action == 'apply' && needs.plan.outputs.has_changes == '2' }}
     runs-on: ubuntu-latest
-    environment: prod          # 审批 #2
+    environment: prod
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.TF_AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_AWS_SECRET_ACCESS_KEY }}
@@ -92,7 +92,7 @@ EOF
       - uses: actions/download-artifact@v4
         with:
           name: tfplan-prod
-          path: ./envs/prod
+          path: .
 
       - name: Terraform init
         run: terraform init -input=false
@@ -102,9 +102,8 @@ EOF
 
       - name: Output summary
         run: |
-          {
-            echo "### Terraform PROD applied"
-            echo '```'
-            terraform output
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          terraform output > /tmp/tf_out.txt
+          echo "### Terraform PROD applied" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat /tmp/tf_out.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
