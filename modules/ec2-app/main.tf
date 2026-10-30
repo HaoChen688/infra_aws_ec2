@@ -105,8 +105,10 @@ resource "aws_security_group" "app" {
 
   # App port
   ingress {
-    from_port   = var.app_port
-    to_port     = var.app_port
+    #from_port   = var.app_port
+    #to_port     = var.app_port
+	from_port   = 80
+	to_port     = 80
     protocol    = "tcp"
     #cidr_blocks = [var.internal_app_cidr]
 	cidr_blocks = ["0.0.0.0/0"]
@@ -171,7 +173,7 @@ locals {
 # ---------- EC2 ----------
 resource "aws_instance" "app" {
   ami                         = local.ami
-  instance_type               = var.instance_type
+  instance_type               = var.instance_type 
   key_name                    = var.key_name
   subnet_id                   = data.aws_subnets.default.ids[0]
   vpc_security_group_ids      = [aws_security_group.app.id]
