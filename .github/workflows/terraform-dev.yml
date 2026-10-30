@@ -36,7 +36,7 @@ jobs:
       TF_INPUT: "false"
     defaults:
       run:
-        working-directory: ./infra_aws_ec2/envs/dev
+        working-directory: ./envs/dev
     steps:
       - uses: actions/checkout@v4
 
@@ -78,7 +78,7 @@ EOF
         uses: actions/upload-artifact@v4
         with:
           name: tfplan-dev
-          path: ./infra_aws_ec2/envs/dev/tfplan
+          path: ./envs/dev/tfplan
           retention-days: 7
 
       - name: Terraform apply
