@@ -86,7 +86,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: tfplan-prod
+          name: tfplan-prod 
           path: infra_aws_ec2/envs/prod
 
       - run: terraform init -input=false
