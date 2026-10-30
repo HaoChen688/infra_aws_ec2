@@ -34,21 +34,24 @@ jobs:
       TF_INPUT: "false"
     defaults:
       run:
-        working-directory: infra_aws_ec2/envs/prod
+        working-directory: ./infra_aws_ec2/envs/prod
     steps:
       - uses: actions/checkout@v4
+
       - uses: hashicorp/setup-terraform@v3
-        with: { terraform_version: "1.7.5" }
+        with:
+          terraform_version: "1.7.5"
 
       - name: Render tfvars override (admin_cidrs)
         if: ${{ inputs.admin_cidrs != '' }}
         run: |
           cat > override.auto.tfvars <<EOF
-          admin_cidrs = [$(echo "${{ inputs.admin_cidrs }}" | awk -F',' '{for(i=1;i<=NF;i++){printf "\"%s\"%s", $i, (i<NF?",":"")}}')]
-          EOF
+admin_cidrs = [$(echo "${{ inputs.admin_cidrs }}" | awk -F',' '{for(i=1;i<=NF;i++){printf "\"%s\"%s", $i, (i<NF?",":"")}}')]
+EOF
           cat override.auto.tfvars
 
-      - run: terraform init -input=false
+      - name: Terraform init
+        run: terraform init -input=false
 
       - id: plan
         run: |
@@ -62,7 +65,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: tfplan-prod
-          path: infra_aws_ec2/envs/prod/tfplan
+          path: ./infra_aws_ec2/envs/prod/tfplan
           retention-days: 7
 
   apply:
@@ -78,20 +81,24 @@ jobs:
       TF_INPUT: "false"
     defaults:
       run:
-        working-directory: infra_aws_ec2/envs/prod
+        working-directory: ./infra_aws_ec2/envs/prod
     steps:
       - uses: actions/checkout@v4
+
       - uses: hashicorp/setup-terraform@v3
-        with: { terraform_version: "1.7.5" }
+        with:
+          terraform_version: "1.7.5"
 
       - uses: actions/download-artifact@v4
         with:
           name: tfplan-prod
-          path: infra_aws_ec2/envs/prod
+          path: ./infra_aws_ec2/envs/prod
 
-      - run: terraform init -input=false
+      - name: Terraform init
+        run: terraform init -input=false
 
-      - run: terraform apply -input=false -auto-approve tfplan
+      - name: Terraform apply
+        run: terraform apply -input=false -auto-approve tfplan
 
       - name: Output summary
         run: |

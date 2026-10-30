@@ -36,7 +36,7 @@ jobs:
       TF_INPUT: "false"
     defaults:
       run:
-        working-directory: infra_aws_ec2/envs/dev
+        working-directory: ./infra_aws_ec2/envs/dev
     steps:
       - uses: actions/checkout@v4
 
@@ -56,12 +56,12 @@ jobs:
         if: ${{ inputs.admin_cidrs != '' }}
         run: |
           cat > override.auto.tfvars <<EOF
-          admin_cidrs = [$(echo "${{ inputs.admin_cidrs }}" | awk -F',' '{for(i=1;i<=NF;i++){printf "\"%s\"%s", $i, (i<NF?",":"")}}')]
-          EOF
+admin_cidrs = [$(echo "${{ inputs.admin_cidrs }}" | awk -F',' '{for(i=1;i<=NF;i++){printf "\"%s\"%s", $i, (i<NF?",":"")}}')]
+EOF
           cat override.auto.tfvars
 
       - name: Terraform fmt
-        run: terraform fmt -check -recursive || true
+        run: terraform fmt -check -recursive
 
       - name: Terraform init
         run: terraform init -input=false
@@ -78,7 +78,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: tfplan-dev
-          path: infra_aws_ec2/envs/dev/tfplan
+          path: ./infra_aws_ec2/envs/dev/tfplan
           retention-days: 7
 
       - name: Terraform apply
