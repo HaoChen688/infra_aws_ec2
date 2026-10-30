@@ -53,17 +53,24 @@ jobs:
           fi
 
       - name: Render tfvars override (admin_cidrs)
-        if: ${{ inputs.admin_cidrs != '' }}
+        if: ${{ inputs.admin_cidrs != '' }} 
+        env:
+          ADMIN_CIDRS: ${{ inputs.admin_cidrs }}
         run: |
-          cat > override.auto.tfvars <<EOF
-admin_cidrs = [$(echo "${{ inputs.admin_cidrs }}" | awk -F',' '{for(i=1;i<=NF;i++){printf "\"%s\"%s", $i, (i<NF?",":"")}}')]
-EOF
+          python3 - <<'PY'
+          import os
+          raw = os.environ.get("ADMIN_CIDRS", "").strip()
+          cidrs = [c.strip() for c in raw.split(",") if c.strip()]
+          with open("override.auto.tfvars", "w") as f:
+              f.write("admin_cidrs = [%s]\n" % ", ".join('"%s"' % c for c in cidrs))
+          PY
           cat override.auto.tfvars
 
-      - name: Terraform fmt
+
+      - name: Terraform fmt 
         run: terraform fmt -check -recursive
 
-      - name: Terraform init
+      - name: Terraform init 
         run: terraform init -input=false
 
       - name: Terraform validate

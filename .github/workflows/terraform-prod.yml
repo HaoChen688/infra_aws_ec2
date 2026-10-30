@@ -44,10 +44,12 @@ jobs:
 
       - name: Render tfvars override (admin_cidrs)
         if: ${{ inputs.admin_cidrs != '' }}
+        env:
+          ADMIN_CIDRS: ${{ inputs.admin_cidrs }}
         run: |
           cat > override.auto.tfvars <<EOF
-admin_cidrs = [$(echo "${{ inputs.admin_cidrs }}" | awk -F',' '{for(i=1;i<=NF;i++){printf "\"%s\"%s", $i, (i<NF?",":"")}}')]
-EOF
+          admin_cidrs = [$(echo "$ADMIN_CIDRS" | awk -F',' '{for(i=1;i<=NF;i++){gsub(/^[ \t]+|[ \t]+$/,"",$i); printf "\"%s\"%s", $i, (i<NF?",":"")}}')]
+          EOF
           cat override.auto.tfvars
 
       - name: Terraform init
